@@ -94,7 +94,7 @@ def parse_git_index(index_path):
 
         # Format and print
         mode_oct = oct(mode)[2:]
-        print(f" \033[1;34m[{i+1}] {name}\033[0m")
+        print(f" [{i+1}] \033[1;34m{name}\033[0m")
         print(f"     └─ Mode (Permissions) : {mode_oct}")
         print(f"     └─ File Size          : {file_size} bytes")
         print(f"     └─ Blob SHA-1         : \033[33m{sha1_hex}\033[0m")
