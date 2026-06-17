@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Git Index Reader - git-read-index
+
+This software is released under the RADIOACTIVE SOURCE-AVAILABLE LICENSE (RSAL) – VERSION 1.0.
+
+Description:
+    A utility tool to parse Git index files and display staged file metadata.
+"""
+
+import struct
+import hashlib
+import sys
+import os
+import subprocess
+
+def get_git_index_path():
+    """Automatically find the real .git/index path using git rev-parse"""
+    try:
+        git_dir = subprocess.check_output(
+            ['git', 'rev-parse', '--git-dir'], 
+            stderr=subprocess.DEVNULL, 
+            text=True
+        ).strip()
+        return os.path.join(git_dir, 'index')
+    except subprocess.CalledProcessError:
+        return None
+
+def parse_git_index(index_path):
+    if not os.path.exists(index_path):
+        print(f"\033[31mError: Index file not found at {index_path}\033[0m")
+        return
+
+    with open(index_path, 'rb') as f:
+        content = f.read()
+
+    # 1. Verify file integrity (last 20 bytes are SHA-1 checksum of the preceding content)
+    file_data = content[:-20]
+    expected_sha = content[-20:]
+    actual_sha = hashlib.sha1(file_data).digest()
+    if actual_sha != expected_sha:
+        print("\033[33m⚠️ WARNING: Index file SHA-1 checksum failed, file may be corrupted!\033[0m")
+
+    # 2. Parse Header (12 bytes)
+    dirc, version, entries_count = struct.unpack('>4sII', content[:12])
+    
+    print("\033[36m" + "=" * 60 + "\033[0m")
+    print(f"\033[1;32m[ Git Index Header ]\033[0m")
+    print(f"  Magic Number  : {dirc.decode('ascii', errors='replace')}")
+    print(f"  Version       : {version}")
+    print(f"  Entries Count : {entries_count}")
+    print("\033[36m" + "=" * 60 + "\033[0m")
+
+    offset = 12
+
+    # 3. Parse Index Entries
+    if entries_count > 0:
+        print(f"\033[1;32m[ Staging Entries ]\033[0m")
+        print("-" * 60)
+        
+    for i in range(entries_count):
+        # Prevent out-of-bounds error if the file ends prematurely
+        if offset + 62 > len(content) - 20:
+            print(f"\033[31m  [!] Data unexpectedly truncated while parsing entry {i+1}\033[0m")
+            break
+            
+        entry_start = offset
+        
+        # Read the fixed 62-byte metadata (>10I20sH matches exactly 62 bytes)
+        meta = struct.unpack('>10I20sH', content[offset:offset+62])
+        
+        mtime_sec = meta[2]
+        mode = meta[6]
+        file_size = meta[9]
+        sha1_bytes = meta[10]
+        flags = meta[11]
+        
+        # Extract filename length from the lower 12 bits of flags
+        name_length = flags & 0x0FFF
+        sha1_hex = sha1_bytes.hex()
+        
+        # Read the filename
+        offset += 62
+        name_bytes = content[offset:offset+name_length]
+        name = name_bytes.decode('utf-8', errors='replace')
+        
+        # Git padding rule: Entry length must be a multiple of 8 bytes
+        offset += name_length
+        entry_len = offset - entry_start
+        pad_len = 8 - (entry_len % 8)
+        offset += pad_len 
+
+        # Format and print
+        mode_oct = oct(mode)[2:]
+        print(f" \033[1;34m[{i+1}] {name}\033[0m")
+        print(f"     └─ Mode (Permissions) : {mode_oct}")
+        print(f"     └─ File Size          : {file_size} bytes")
+        print(f"     └─ Blob SHA-1         : \033[33m{sha1_hex}\033[0m")
+        print(f"     └─ Modified (mtime)   : {mtime_sec}")
+        print("-" * 60)
+
+    # 4. Parse Extensions (e.g., TREE, REUC)
+    if offset < len(content) - 20:
+        print(f"\033[1;32m[ Extensions ]\033[0m")
+        while offset + 8 <= len(content) - 20:
+            ext_name, ext_size = struct.unpack('>4sI', content[offset:offset+8])
+            ext_name_str = ext_name.decode('ascii', errors='replace')
+            print(f"  Found Extension: \033[35m{ext_name_str}\033[0m (Size: {ext_size} bytes)")
+            offset += 8 + ext_size
+        print("\033[36m" + "=" * 60 + "\033[0m")
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        target_path = sys.argv[1]
+    else:
+        target_path = get_git_index_path()
+        if not target_path:
+            print("\033[31mFATAL ERROR: Current directory (or any parent) is not a Git repository!\033[0m")
+            sys.exit(1)
+
+    parse_git_index(target_path)
+
